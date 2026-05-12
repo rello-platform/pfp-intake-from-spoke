@@ -23,6 +23,19 @@
 import { z } from "zod";
 
 export const PfpIntakeFromSpokePayloadSchema = z.object({
+  // ─── Cross-app routing + dedup (v0.2.0 — SPEC §4.2 + §4.5 + §9.3) ───
+  /** Agent on whose subdomain/storefront the lead transacted. PFP receiver
+   * resolves agentConfig via { agentSlug, isActive: true } per SPEC §4.5. */
+  agentSlug: z.string().min(1).max(120),
+  /** Optional Rello-side lead id for cross-app correlation; PFP stores on
+   * LeadIntake.relloLeadId for two-way attribution. */
+  relloLeadId: z.string().min(1).max(64).optional(),
+  /** Spoke-side outbox idempotency key. Shape:
+   * `<leadId>:get-pre-approved:<interactionId>` per ~SIGNAL-AND-WEBHOOK §5.2.
+   * PFP receiver echoes this on the AuditLog.metadata for forensic attribution
+   * and HS-side `FailedPfpIntake.sendIdempotencyKey @unique` dedupes on retry. */
+  sendIdempotencyKey: z.string().min(1).max(64),
+
   // ─── Identity (capture-card per Q-NEW-5 Q15) ───
   firstName: z.string().min(1).max(80),
   lastName: z.string().min(1).max(80),

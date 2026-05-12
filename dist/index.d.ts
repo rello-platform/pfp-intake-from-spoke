@@ -21,6 +21,9 @@
  */
 import { z } from "zod";
 export declare const PfpIntakeFromSpokePayloadSchema: z.ZodObject<{
+    agentSlug: z.ZodString;
+    relloLeadId: z.ZodOptional<z.ZodString>;
+    sendIdempotencyKey: z.ZodString;
     firstName: z.ZodString;
     lastName: z.ZodString;
     email: z.ZodString;
