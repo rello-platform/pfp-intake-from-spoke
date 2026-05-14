@@ -86,6 +86,22 @@ export declare const PfpIntakeFromSpokePayloadSchema: z.ZodObject<{
         NEVER: "NEVER";
         LESS_THAN_7: "LESS_THAN_7";
     }>>;
+    magnetType: z.ZodOptional<z.ZodEnum<{
+        free_prequal: "free_prequal";
+        free_home_value: "free_home_value";
+        free_buying_power: "free_buying_power";
+        free_neighborhood_report: "free_neighborhood_report";
+        other: "other";
+    }>>;
+    scoutLeadMagnetId: z.ZodOptional<z.ZodString>;
+    scoutIntentSignal: z.ZodOptional<z.ZodEnum<{
+        buying_now: "buying_now";
+        buying_3_6mo: "buying_3_6mo";
+        buying_6_12mo: "buying_6_12mo";
+        researching: "researching";
+    }>>;
+    scoutSubmittedAt: z.ZodOptional<z.ZodString>;
+    scoutFormPayload: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
 }, z.core.$strip>;
 export type PfpIntakeFromSpokePayload = z.infer<typeof PfpIntakeFromSpokePayloadSchema>;
 //# sourceMappingURL=index.d.ts.map

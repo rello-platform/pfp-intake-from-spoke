@@ -84,6 +84,22 @@ if (!parsed.success) {
 | `yearsSinceBankruptcy` | `yearsSinceBankruptcy String?` | HS surveys narrow `NEVER` / `LESS_THAN_7`; MLO refines to PFP's wider documented enum (`NEVER` / `LESS_THAN_1` / `1_TO_2` / `2_TO_3` / `3_TO_4` / `4_TO_5` / `5_TO_7` / `7_PLUS`) post-intake |
 | `hasForeclosureHistory`, `yearsSinceForeclosure` | `hasForeclosureHistory Boolean?` + `yearsSinceForeclosure String?` | same narrow-union pattern as `yearsSinceBankruptcy` |
 
+## v0.3.0 — Lead-magnet discriminator + scout_* cache (2026-05-14)
+
+Additive optional fields appended to `PfpIntakeFromSpokePayloadSchema` for the Home Scout lead-magnet → PFP intake flow. All fields are optional; v0.2.0 callers (the shipped `get-pre-approved` flow) remain byte-identical.
+
+| Field | Type | Purpose |
+|---|---|---|
+| `magnetType` | enum `free_prequal` \| `free_home_value` \| `free_buying_power` \| `free_neighborhood_report` \| `other` (optional) | Discriminator; non-null marks the payload as a lead-magnet flow. Null/absent = generic spoke intake (the existing `get-pre-approved` flow). |
+| `scoutLeadMagnetId` | string (1-64 chars, optional) | HS StandaloneForm or LeadMagnet row id; cross-spoke FK semantically (no DB constraint). |
+| `scoutIntentSignal` | enum `buying_now` \| `buying_3_6mo` \| `buying_6_12mo` \| `researching` (optional) | Buyer intent slug captured by the HS magnet form. |
+| `scoutSubmittedAt` | ISO datetime string (optional) | HS `FormSubmission.createdAt`. Distinct from PFP `LeadIntake.createdAt`. |
+| `scoutFormPayload` | `Record<string, unknown>` (optional) | Catch-all for non-canonical HS form fields (UTM attribution, custom configurator inputs). |
+
+The PFP receiver at `POST /api/intakes/from-spoke` branches on `payload.magnetType != null` to populate first-class `scout*` cache columns on `LeadIntake` + set `source: "HS_LEAD_MAGNET"`. See `SPEC-PFP-HS-REFERRAL-PATH` for the full receiver-side contract.
+
+Backward-compat: `z.object` default-strips unknown keys (no `.strict()` / no `.passthrough()` on the schema), so v0.2.0 callers omitting the new fields produce byte-identical validation behavior.
+
 ## Versioning
 
 - `0.1.0` — initial schema (15-field survey + capture-card; PFP-canonical enums; `creditScoreRange` 7-bucket + `employmentType.RETIRED` per Kelly 2026-05-12 adjudication, awaiting PFP-side extension in MAIN-BUILD PR 4).

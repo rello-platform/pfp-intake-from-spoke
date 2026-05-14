@@ -92,4 +92,26 @@ export const PfpIntakeFromSpokePayloadSchema = z.object({
     // Q14 — foreclosure in last 7 years (same narrow-union pattern as Q13)
     hasForeclosureHistory: z.boolean(),
     yearsSinceForeclosure: z.enum(["NEVER", "LESS_THAN_7"]).nullable(),
+    // ─── Lead-magnet discriminator + cache (v0.3.0 — SPEC-PFP-HS-REFERRAL-PATH) ───
+    // Optional discriminator; null/absent on existing get-pre-approved callers
+    // preserves backward-compat. Non-null = lead-magnet flow.
+    magnetType: z
+        .enum([
+        "free_prequal",
+        "free_home_value",
+        "free_buying_power",
+        "free_neighborhood_report",
+        "other",
+    ])
+        .optional(),
+    /** HS StandaloneForm/LeadMagnet row id; cross-spoke FK semantically. */
+    scoutLeadMagnetId: z.string().min(1).max(64).optional(),
+    /** Buyer intent slug captured by HS magnet form. */
+    scoutIntentSignal: z
+        .enum(["buying_now", "buying_3_6mo", "buying_6_12mo", "researching"])
+        .optional(),
+    /** HS FormSubmission.createdAt ISO. Distinct from PFP LeadIntake.createdAt. */
+    scoutSubmittedAt: z.string().datetime().optional(),
+    /** Catch-all for non-canonical HS form fields (UTM, custom configurator inputs). */
+    scoutFormPayload: z.record(z.string(), z.unknown()).optional(), // zod v4 explicit key schema
 });
