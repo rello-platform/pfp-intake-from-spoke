@@ -7,133 +7,176 @@
  * `PfpIntakeFromSpokePayloadSchema` and writes a `LeadIntake` row with
  * `status: "QUICK_ESTIMATE"`.
  *
- * Field set is the 15-question survey + capture-card lock authored by Kelly
- * 2026-05-12 (see HS `ANSWERS.md` §16 Q-NEW-5). Each field maps 1:1 to PFP
- * `LeadIntake` columns; two additive PFP columns (`purchaseStage`,
- * `wantsAgentReferral`) ship in the gated MAIN-BUILD wave PR 4. The
- * `creditScoreRange` 7-bucket scheme and `employmentType.RETIRED` value
- * require companion PFP-side enum extensions (also MAIN-BUILD PR 4) per
- * Kelly 2026-05-12 adjudication.
+ * v0.4.0 (2026-06-08) — REFINANCE branch. The original 15-field set was
+ * purchase-shaped. A refinance asks a different set (current balance, current
+ * rate, home value, cash-out, second mortgage, etc.), so the purchase-only
+ * fields became `.optional()` and a refinance block was added. A `superRefine`
+ * enforces the correct set per `loanPurpose` — PURCHASE still requires the full
+ * purchase set (existing callers unchanged / backward-compatible), REFINANCE
+ * requires the refinance set. Each field still maps 1:1 to a PFP `LeadIntake`
+ * column (most refi columns already existed; `secondMortgageBalance` is the one
+ * net-new column added in the companion PFP PR).
  *
  * Auth: PFP receiver gates via `requireServiceBearer` + the
- * `pfp-intake-from-spoke:write` permission slug (added in
- * `@rello-platform/permissions` at v0.30.0 alongside this package's v0.1.0).
+ * `pfp-intake-from-spoke:write` permission slug.
  */
 
 import { z } from "zod";
 
-export const PfpIntakeFromSpokePayloadSchema = z.object({
-  // ─── Cross-app routing + dedup (v0.2.0 — SPEC §4.2 + §4.5 + §9.3) ───
-  /** Agent on whose subdomain/storefront the lead transacted. PFP receiver
-   * resolves agentConfig via { agentSlug, isActive: true } per SPEC §4.5. */
-  agentSlug: z.string().min(1).max(120),
-  /** Optional Rello-side lead id for cross-app correlation; PFP stores on
-   * LeadIntake.relloLeadId for two-way attribution. */
-  relloLeadId: z.string().min(1).max(64).optional(),
-  /** Spoke-side outbox idempotency key. Shape:
-   * `<leadId>:get-pre-approved:<interactionId>` per ~SIGNAL-AND-WEBHOOK §5.2.
-   * PFP receiver echoes this on the AuditLog.metadata for forensic attribution
-   * and HS-side `FailedPfpIntake.sendIdempotencyKey @unique` dedupes on retry. */
-  sendIdempotencyKey: z.string().min(1).max(64),
+export const PfpIntakeFromSpokePayloadSchema = z
+  .object({
+    // ─── Cross-app routing + dedup (v0.2.0 — SPEC §4.2 + §4.5 + §9.3) ───
+    /** Agent on whose subdomain/storefront the lead transacted. */
+    agentSlug: z.string().min(1).max(120),
+    /** Optional Rello-side lead id for cross-app correlation. */
+    relloLeadId: z.string().min(1).max(64).optional(),
+    /** Spoke-side outbox idempotency key (`<leadId>:get-pre-approved:<interactionId>`). */
+    sendIdempotencyKey: z.string().min(1).max(64),
 
-  // ─── Identity (capture-card per Q-NEW-5 Q15) ───
-  firstName: z.string().min(1).max(80),
-  lastName: z.string().min(1).max(80),
-  email: z.string().email().max(200),
-  phone: z.string().min(7).max(40).optional(),
-  notes: z.string().max(2000).optional(),
+    // ─── Identity (capture-card) — required on every path ───
+    firstName: z.string().min(1).max(80),
+    lastName: z.string().min(1).max(80),
+    email: z.string().email().max(200),
+    phone: z.string().min(7).max(40).optional(),
+    notes: z.string().max(2000).optional(),
 
-  // ─── 14 survey-answer fields (verbatim from ANSWERS §16 Q-NEW-5 table) ───
+    // ─── Loan purpose — the branch discriminator ───
+    loanPurpose: z.enum(["PURCHASE", "REFINANCE"]),
 
-  // Q1 — loan purpose (PFP canonical: PURCHASE | REFINANCE)
-  loanPurpose: z.enum(["PURCHASE", "REFINANCE"]),
+    // ─── Shared fields (asked on BOTH purchase + refinance) ───
+    propertyType: z.enum(["SINGLE_FAMILY", "CONDO", "TOWN_HOME", "MULTI_FAMILY"]),
+    occupancy: z.enum(["PRIMARY", "SECONDARY", "RENTAL"]),
+    // Exact estimated credit score (300–850); `creditScoreRange` bucket derived from it.
+    creditScoreRange: z.enum([
+      "780+",
+      "740-779",
+      "700-739",
+      "660-699",
+      "620-659",
+      "580-619",
+      "Below 580",
+    ]),
+    creditScore: z.number().int().min(300).max(850),
+    militaryServiceType: z.enum(["ACTIVE_DUTY", "VETERAN", "RESERVE_GUARD"]).nullable(),
+    isVeteran: z.boolean(),
+    employmentType: z.enum(["W2", "SELF_EMPLOYED", "RETIRED"]),
+    baseIncome: z.number().nonnegative().max(10_000_000),
+    yearsSinceBankruptcy: z.enum(["NEVER", "LESS_THAN_7"]),
+    hasForeclosureHistory: z.boolean(),
+    yearsSinceForeclosure: z.enum(["NEVER", "LESS_THAN_7"]).nullable(),
 
-  // Q2 — property type (PFP canonical)
-  propertyType: z.enum(["SINGLE_FAMILY", "CONDO", "TOWN_HOME", "MULTI_FAMILY"]),
+    // ─── PURCHASE-only fields (optional at field level; required for PURCHASE
+    //      via the superRefine below — keeps existing purchase callers valid) ───
+    isFirstTimeBuyer: z.boolean().optional(),
+    purchaseStage: z
+      .enum([
+        "SIGNED_PURCHASE_AGREEMENT",
+        "BUYING_2_TO_6_MONTHS",
+        "OFFER_PENDING",
+        "RESEARCHING",
+      ])
+      .optional(),
+    wantsAgentReferral: z.boolean().optional(),
+    purchasePrice: z.number().nonnegative().max(10_000_000).optional(),
+    downPaymentAmount: z.number().nonnegative().optional(),
+    downPaymentPct: z.number().min(0).max(100).optional(),
 
-  // Q3 — occupancy (PFP canonical)
-  occupancy: z.enum(["PRIMARY", "SECONDARY", "RENTAL"]),
+    // ─── REFINANCE-only fields (v0.4.0; optional at field level, required for
+    //      REFINANCE via the superRefine below) ───
+    /** Borrower's primary refinance objective. */
+    refiGoal: z
+      .enum([
+        "LOWER_PAYMENT",
+        "CASH_OUT",
+        "SHORTEN_TERM",
+        "REMOVE_PMI",
+        "DEBT_CONSOLIDATION",
+      ])
+      .optional(),
+    /** Current loan program — drives streamline/IRRRL eligibility. */
+    currentLoanType: z.enum(["CONVENTIONAL", "FHA", "VA", "USDA", "NOT_SURE"]).optional(),
+    /** Estimated current market value of the property. */
+    propertyValue: z.number().nonnegative().max(100_000_000).optional(),
+    /** Remaining balance on the (first) mortgage. */
+    currentLoanBalance: z.number().nonnegative().max(100_000_000).optional(),
+    /** Current note rate, percent (e.g. 5.25). */
+    currentRate: z.number().min(0).max(25).optional(),
+    /** Whether a second mortgage / subordinate lien exists. */
+    hasSecondMortgage: z.boolean().optional(),
+    /** Balance on the second mortgage (required when hasSecondMortgage === true). */
+    secondMortgageBalance: z.number().nonnegative().max(100_000_000).optional(),
+    /** Additional cash the borrower wants to take out (0 = none). */
+    cashOutAmount: z.number().nonnegative().max(100_000_000).optional(),
+    /** Mortgage lates in the last 12 months. */
+    latePaymentsLastYear: z.enum(["NONE", "ONE", "TWO_PLUS"]).optional(),
+    /** Whether the borrower currently pays mortgage insurance (PMI/MIP). */
+    paysMortgageInsurance: z.boolean().optional(),
 
-  // Q4 — first-time buyer
-  isFirstTimeBuyer: z.boolean(),
+    // ─── Subject-property location (refinance autocomplete; optional, best-effort) ───
+    propertyCity: z.string().max(120).optional(),
+    propertyState: z.string().max(40).optional(),
+    propertyCounty: z.string().max(120).optional(),
+    propertyZip: z.string().max(12).optional(),
 
-  // Q5 — purchase stage (NEW field on PFP LeadIntake; ships in MAIN-BUILD PR 4)
-  purchaseStage: z.enum([
-    "SIGNED_PURCHASE_AGREEMENT",
-    "BUYING_2_TO_6_MONTHS",
-    "OFFER_PENDING",
-    "RESEARCHING",
-  ]),
+    // ─── Lead-magnet discriminator + cache (v0.3.0) ───
+    magnetType: z
+      .enum([
+        "free_prequal",
+        "free_home_value",
+        "free_buying_power",
+        "free_neighborhood_report",
+        "other",
+      ])
+      .optional(),
+    scoutLeadMagnetId: z.string().min(1).max(64).optional(),
+    scoutIntentSignal: z
+      .enum(["buying_now", "buying_3_6mo", "buying_6_12mo", "researching"])
+      .optional(),
+    scoutSubmittedAt: z.string().datetime().optional(),
+    scoutFormPayload: z.record(z.string(), z.unknown()).optional(),
+  })
+  .superRefine((data, ctx) => {
+    const requireFields = (fields: string[]) => {
+      for (const field of fields) {
+        if ((data as Record<string, unknown>)[field] === undefined) {
+          ctx.addIssue({
+            code: "custom",
+            path: [field],
+            message: `${field} is required when loanPurpose is ${data.loanPurpose}`,
+          });
+        }
+      }
+    };
 
-  // Q6 — wants agent referral (NEW field on PFP LeadIntake; ships in MAIN-BUILD PR 4)
-  wantsAgentReferral: z.boolean(),
-
-  // Q7 — purchase price
-  purchasePrice: z.number().nonnegative().max(10_000_000),
-
-  // Q8 — down payment ($ + % both stored; % drives slider)
-  downPaymentAmount: z.number().nonnegative(),
-  downPaymentPct: z.number().min(0).max(100),
-
-  // Q9 — credit score (HS 7-bucket scheme; PFP-side accepted-values extension
-  // ships in MAIN-BUILD PR 4 per Kelly 2026-05-12 adjudication)
-  creditScoreRange: z.enum([
-    "780+",
-    "740-779",
-    "700-739",
-    "660-699",
-    "620-659",
-    "580-619",
-    "Below 580",
-  ]),
-  // Derived per prefillMap ("780+"→800, "740-779"→760, "700-739"→720,
-  // "660-699"→680, "620-659"→640, "580-619"→600, "Below 580"→560)
-  creditScore: z.number().int().min(300).max(850),
-
-  // Q10 — military status (PFP canonical; nullable when "None")
-  militaryServiceType: z
-    .enum(["ACTIVE_DUTY", "VETERAN", "RESERVE_GUARD"])
-    .nullable(),
-  isVeteran: z.boolean(),
-
-  // Q11 — employment status (PFP canonical naming W2 not W2_EMPLOYEE per
-  // 2026-05-12 lock; RETIRED is PFP-extend in MAIN-BUILD PR 4)
-  employmentType: z.enum(["W2", "SELF_EMPLOYED", "RETIRED"]),
-
-  // Q12 — base income (gross annual borrower(s))
-  baseIncome: z.number().nonnegative().max(10_000_000),
-
-  // Q13 — bankruptcy in last 7 years (HS surveys narrow union; MLO refines
-  // to PFP's wider documented enum post-intake)
-  yearsSinceBankruptcy: z.enum(["NEVER", "LESS_THAN_7"]),
-
-  // Q14 — foreclosure in last 7 years (same narrow-union pattern as Q13)
-  hasForeclosureHistory: z.boolean(),
-  yearsSinceForeclosure: z.enum(["NEVER", "LESS_THAN_7"]).nullable(),
-
-  // ─── Lead-magnet discriminator + cache (v0.3.0 — SPEC-PFP-HS-REFERRAL-PATH) ───
-  // Optional discriminator; null/absent on existing get-pre-approved callers
-  // preserves backward-compat. Non-null = lead-magnet flow.
-  magnetType: z
-    .enum([
-      "free_prequal",
-      "free_home_value",
-      "free_buying_power",
-      "free_neighborhood_report",
-      "other",
-    ])
-    .optional(),
-  /** HS StandaloneForm/LeadMagnet row id; cross-spoke FK semantically. */
-  scoutLeadMagnetId: z.string().min(1).max(64).optional(),
-  /** Buyer intent slug captured by HS magnet form. */
-  scoutIntentSignal: z
-    .enum(["buying_now", "buying_3_6mo", "buying_6_12mo", "researching"])
-    .optional(),
-  /** HS FormSubmission.createdAt ISO. Distinct from PFP LeadIntake.createdAt. */
-  scoutSubmittedAt: z.string().datetime().optional(),
-  /** Catch-all for non-canonical HS form fields (UTM, custom configurator inputs). */
-  scoutFormPayload: z.record(z.string(), z.unknown()).optional(), // zod v4 explicit key schema
-});
+    if (data.loanPurpose === "PURCHASE") {
+      requireFields([
+        "isFirstTimeBuyer",
+        "purchaseStage",
+        "wantsAgentReferral",
+        "purchasePrice",
+        "downPaymentAmount",
+        "downPaymentPct",
+      ]);
+    } else if (data.loanPurpose === "REFINANCE") {
+      requireFields([
+        "refiGoal",
+        "currentLoanType",
+        "propertyValue",
+        "currentLoanBalance",
+        "currentRate",
+        "hasSecondMortgage",
+        "latePaymentsLastYear",
+      ]);
+      // Second-mortgage balance is required only when a second mortgage exists.
+      if (data.hasSecondMortgage === true && data.secondMortgageBalance === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["secondMortgageBalance"],
+          message: "secondMortgageBalance is required when hasSecondMortgage is true",
+        });
+      }
+    }
+  });
 
 export type PfpIntakeFromSpokePayload = z.infer<
   typeof PfpIntakeFromSpokePayloadSchema
