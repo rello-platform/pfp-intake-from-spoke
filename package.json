@@ -1,6 +1,6 @@
 {
   "name": "@rello-platform/pfp-intake-from-spoke",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Cross-app Pfp LeadIntake-from-spoke zod payload schema for spoke\u2192PFP intake creation (e.g., HS get-pre-approved CTA).",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

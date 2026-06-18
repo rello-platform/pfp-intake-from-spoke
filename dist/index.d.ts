@@ -17,6 +17,16 @@
  * column (most refi columns already existed; `secondMortgageBalance` is the one
  * net-new column added in the companion PFP PR).
  *
+ * v0.6.0 (2026-06-18) — optional BANK_STATEMENT loan branch. Home Scout is
+ * adding a "Get Pre-Approved for a Bank Statement loan" CTA whose lead must
+ * reach PFP's bank-statement advisor with enough to produce a quote. A
+ * `docType` discriminator plus bank-statement fields were added — ALL optional
+ * at the schema level. A dedicated superRefine branch enforces the
+ * bank-statement minimum ONLY when `docType === "BANK_STATEMENT"`, so existing
+ * purchase/refinance senders (which never set `docType`) are completely
+ * unaffected — non-breaking, mirroring the v0.5.0 `unitCount` precedent. The
+ * purchase/refinance required sets are unchanged.
+ *
  * Auth: PFP receiver gates via `requireServiceBearer` + the
  * `pfp-intake-from-spoke:write` permission slug.
  */
@@ -118,12 +128,85 @@ export declare const PfpIntakeFromSpokePayloadSchema: z.ZodObject<{
     propertyCounty: z.ZodOptional<z.ZodString>;
     propertyZip: z.ZodOptional<z.ZodString>;
     unitCount: z.ZodOptional<z.ZodNumber>;
+    docType: z.ZodOptional<z.ZodEnum<{
+        BANK_STATEMENT: "BANK_STATEMENT";
+    }>>;
+    incomeMethod: z.ZodOptional<z.ZodEnum<{
+        personal_bank: "personal_bank";
+        business_bank: "business_bank";
+        pnl: "pnl";
+        1099: "1099";
+        asset_depletion: "asset_depletion";
+    }>>;
+    statementMonths: z.ZodOptional<z.ZodNumber>;
+    avgMonthlyDeposits: z.ZodOptional<z.ZodNumber>;
+    annualNetIncome: z.ZodOptional<z.ZodNumber>;
+    annual1099: z.ZodOptional<z.ZodNumber>;
+    liquidAssets: z.ZodOptional<z.ZodNumber>;
+    expenseFactorSource: z.ZodOptional<z.ZodEnum<{
+        fixed: "fixed";
+        cpa_stated: "cpa_stated";
+    }>>;
+    statedExpenseRatio: z.ZodOptional<z.ZodNumber>;
+    loanAmount: z.ZodOptional<z.ZodNumber>;
+    ltv: z.ZodOptional<z.ZodNumber>;
+    annualTaxes: z.ZodOptional<z.ZodNumber>;
+    annualInsurance: z.ZodOptional<z.ZodNumber>;
+    monthlyHoa: z.ZodOptional<z.ZodNumber>;
+    otherMonthlyDebts: z.ZodOptional<z.ZodNumber>;
+    expectedRate: z.ZodOptional<z.ZodNumber>;
+    reservesMonths: z.ZodOptional<z.ZodNumber>;
+    interestOnly: z.ZodOptional<z.ZodBoolean>;
+    amortTermMonths: z.ZodOptional<z.ZodNumber>;
+    prepayTerm: z.ZodOptional<z.ZodNumber>;
+    residency: z.ZodOptional<z.ZodEnum<{
+        us_citizen: "us_citizen";
+        permanent_resident: "permanent_resident";
+        itin: "itin";
+        foreign_national: "foreign_national";
+    }>>;
+    existingLienBalance: z.ZodOptional<z.ZodNumber>;
+    businessType: z.ZodOptional<z.ZodString>;
+    yearsSelfEmployed: z.ZodOptional<z.ZodNumber>;
+    entityType: z.ZodOptional<z.ZodEnum<{
+        sole_prop: "sole_prop";
+        llc: "llc";
+        s_corp: "s_corp";
+        c_corp: "c_corp";
+        partnership: "partnership";
+    }>>;
+    numberOfBusinesses: z.ZodOptional<z.ZodNumber>;
+    cpaRelationship: z.ZodOptional<z.ZodEnum<{
+        yes: "yes";
+        no: "no";
+        considering: "considering";
+    }>>;
+    incomePosture: z.ZodOptional<z.ZodEnum<{
+        pnl: "pnl";
+        1099: "1099";
+        bank_statements: "bank_statements";
+        mixed: "mixed";
+    }>>;
+    leadSource: z.ZodOptional<z.ZodEnum<{
+        realtor: "realtor";
+        cpa_attorney: "cpa_attorney";
+        referral: "referral";
+        online: "online";
+        repeat_client: "repeat_client";
+        other: "other";
+    }>>;
+    bestTimeToCall: z.ZodOptional<z.ZodEnum<{
+        mornings: "mornings";
+        afternoons: "afternoons";
+        evenings: "evenings";
+        anytime: "anytime";
+    }>>;
     magnetType: z.ZodOptional<z.ZodEnum<{
+        other: "other";
         free_prequal: "free_prequal";
         free_home_value: "free_home_value";
         free_buying_power: "free_buying_power";
         free_neighborhood_report: "free_neighborhood_report";
-        other: "other";
     }>>;
     scoutLeadMagnetId: z.ZodOptional<z.ZodString>;
     scoutIntentSignal: z.ZodOptional<z.ZodEnum<{

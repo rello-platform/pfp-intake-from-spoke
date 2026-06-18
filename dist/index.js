@@ -17,6 +17,16 @@
  * column (most refi columns already existed; `secondMortgageBalance` is the one
  * net-new column added in the companion PFP PR).
  *
+ * v0.6.0 (2026-06-18) — optional BANK_STATEMENT loan branch. Home Scout is
+ * adding a "Get Pre-Approved for a Bank Statement loan" CTA whose lead must
+ * reach PFP's bank-statement advisor with enough to produce a quote. A
+ * `docType` discriminator plus bank-statement fields were added — ALL optional
+ * at the schema level. A dedicated superRefine branch enforces the
+ * bank-statement minimum ONLY when `docType === "BANK_STATEMENT"`, so existing
+ * purchase/refinance senders (which never set `docType`) are completely
+ * unaffected — non-breaking, mirroring the v0.5.0 `unitCount` precedent. The
+ * purchase/refinance required sets are unchanged.
+ *
  * Auth: PFP receiver gates via `requireServiceBearer` + the
  * `pfp-intake-from-spoke:write` permission slug.
  */
@@ -117,6 +127,82 @@ export const PfpIntakeFromSpokePayloadSchema = z
      * enforced downstream, NOT by contract rejection.
      */
     unitCount: z.number().int().nonnegative().optional(),
+    // ─── BANK-STATEMENT loan branch (v0.6.0) ─────────────────────────────────
+    //  Optional, non-breaking addition for Home Scout's "Get Pre-Approved for a
+    //  Bank Statement loan" CTA. ALL fields below are `.optional()` at the schema
+    //  level; the bank-statement minimum is enforced ONLY when
+    //  `docType === "BANK_STATEMENT"` via the dedicated superRefine branch below.
+    //  Existing purchase/refinance senders (which never set `docType`) are wholly
+    //  unaffected — same backward-compatible pattern as `unitCount` (v0.5.0).
+    //  `propertyValue`, `occupancy`, `cashOutAmount`, `propertyCity/State/County/Zip`
+    //  and `creditScore` are REUSED from the shared/refinance sets above — not
+    //  redeclared here.
+    /** Doc-type discriminator — present only on the bank-statement path. */
+    docType: z.enum(["BANK_STATEMENT"]).optional(),
+    /** How qualifying income is documented (drives the method-specific income field). */
+    incomeMethod: z
+        .enum(["personal_bank", "business_bank", "pnl", "1099", "asset_depletion"])
+        .optional(),
+    /** Number of bank-statement months provided (12–24). */
+    statementMonths: z.number().int().min(12).max(24).optional(),
+    /** Average monthly deposits (personal_bank | business_bank income method). */
+    avgMonthlyDeposits: z.number().nonnegative().max(1_000_000).optional(),
+    /** Annual net income from CPA-prepared P&L (pnl income method). */
+    annualNetIncome: z.number().nonnegative().max(10_000_000).optional(),
+    /** Annual 1099 income (1099 income method). */
+    annual1099: z.number().nonnegative().max(10_000_000).optional(),
+    /** Liquid assets for asset-depletion qualifying (asset_depletion income method). */
+    liquidAssets: z.number().nonnegative().max(10_000_000).optional(),
+    /** Source of the expense factor applied to deposits — fixed table vs CPA-stated. */
+    expenseFactorSource: z.enum(["fixed", "cpa_stated"]).optional(),
+    /** CPA-stated expense ratio (0–1); required when expenseFactorSource === "cpa_stated". */
+    statedExpenseRatio: z.number().min(0).max(1).optional(),
+    /** Requested loan amount. */
+    loanAmount: z.number().nonnegative().max(10_000_000).optional(),
+    /** Loan-to-value percent (0–100). */
+    ltv: z.number().min(0).max(100).optional(),
+    /** Annual property taxes. */
+    annualTaxes: z.number().nonnegative().optional(),
+    /** Annual hazard insurance. */
+    annualInsurance: z.number().nonnegative().optional(),
+    /** Monthly HOA dues. */
+    monthlyHoa: z.number().nonnegative().optional(),
+    /** Other monthly debt obligations (for DTI). */
+    otherMonthlyDebts: z.number().nonnegative().optional(),
+    /** Expected note rate, percent (0–25). */
+    expectedRate: z.number().min(0).max(25).optional(),
+    /** Reserves expressed in months of PITIA. */
+    reservesMonths: z.number().min(0).optional(),
+    /** Whether an interest-only structure is requested. */
+    interestOnly: z.boolean().optional(),
+    /** Amortization term in months (360–480). */
+    amortTermMonths: z.number().int().min(360).max(480).optional(),
+    /** Prepayment-penalty term in months (0 = none). */
+    prepayTerm: z.number().int().min(0).optional(),
+    /** Borrower residency / citizenship status. */
+    residency: z
+        .enum(["us_citizen", "permanent_resident", "itin", "foreign_national"])
+        .optional(),
+    /** Existing lien balance on the subject property. */
+    existingLienBalance: z.number().nonnegative().max(100_000_000).optional(),
+    /** Free-text business type / industry. */
+    businessType: z.string().max(120).optional(),
+    /** Years self-employed. */
+    yearsSelfEmployed: z.number().nonnegative().max(80).optional(),
+    /** Business entity type. */
+    entityType: z.enum(["sole_prop", "llc", "s_corp", "c_corp", "partnership"]).optional(),
+    /** Number of businesses owned. */
+    numberOfBusinesses: z.number().int().nonnegative().max(100).optional(),
+    /** Whether the borrower has a CPA relationship. */
+    cpaRelationship: z.enum(["yes", "no", "considering"]).optional(),
+    /** Borrower's income-documentation posture / preference. */
+    incomePosture: z.enum(["bank_statements", "pnl", "1099", "mixed"]).optional(),
+    /** Where the lead originated. */
+    leadSource: z
+        .enum(["realtor", "cpa_attorney", "referral", "online", "repeat_client", "other"])
+        .optional(),
+    /** Preferred contact window. */
+    bestTimeToCall: z.enum(["mornings", "afternoons", "evenings", "anytime"]).optional(),
     // ─── Lead-magnet discriminator + cache (v0.3.0) ───
     magnetType: z
         .enum([
@@ -172,6 +258,56 @@ export const PfpIntakeFromSpokePayloadSchema = z
                 code: "custom",
                 path: ["secondMortgageBalance"],
                 message: "secondMortgageBalance is required when hasSecondMortgage is true",
+            });
+        }
+    }
+    // ─── BANK-STATEMENT minimum (v0.6.0) ───────────────────────────────────
+    //  Fires ONLY when docType === "BANK_STATEMENT"; orthogonal to loanPurpose,
+    //  so existing purchase/refinance callers (no docType) never reach this.
+    //  Bank-statement fields are NOT added to the purchase/refinance required
+    //  sets above — this branch is the sole enforcer of the bank-statement min.
+    if (data.docType === "BANK_STATEMENT") {
+        // incomeMethod is the entry requirement for the bank-statement path.
+        if (data.incomeMethod === undefined) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["incomeMethod"],
+                message: "incomeMethod is required when docType is BANK_STATEMENT",
+            });
+        }
+        else {
+            // Require the income field that matches the chosen documentation method.
+            const incomeFieldByMethod = {
+                personal_bank: "avgMonthlyDeposits",
+                business_bank: "avgMonthlyDeposits",
+                pnl: "annualNetIncome",
+                "1099": "annual1099",
+                asset_depletion: "liquidAssets",
+            };
+            const requiredIncomeField = incomeFieldByMethod[data.incomeMethod];
+            if (data[requiredIncomeField] === undefined) {
+                ctx.addIssue({
+                    code: "custom",
+                    path: [requiredIncomeField],
+                    message: `${requiredIncomeField} is required when incomeMethod is ${data.incomeMethod}`,
+                });
+            }
+        }
+        // propertyValue is the DTI base / core quote driver for bank-statement loans.
+        if (data.propertyValue === undefined) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["propertyValue"],
+                message: "propertyValue is required when docType is BANK_STATEMENT",
+            });
+        }
+        // A CPA-stated expense factor must carry the stated ratio.
+        if (data.expenseFactorSource === "cpa_stated" &&
+            data.statedExpenseRatio === undefined) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["statedExpenseRatio"],
+                message: "statedExpenseRatio is required when expenseFactorSource is cpa_stated",
             });
         }
     }
