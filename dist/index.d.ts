@@ -27,6 +27,20 @@
  * unaffected — non-breaking, mirroring the v0.5.0 `unitCount` precedent. The
  * purchase/refinance required sets are unchanged.
  *
+ * v0.7.0 (2026-06-18) — optional DSCR (investor) loan branch. Home Scout is
+ * adding a DSCR investor-loan "Get Pre-Approved" CTA. A new `DSCR` value on the
+ * `docType` discriminator plus net-new rent fields (`rentBasis`, `leaseRent`,
+ * `marketRent`, `strIncome`, `monthlyRent`) were added — ALL optional at the
+ * schema level. A dedicated superRefine branch enforces the DSCR minimum ONLY
+ * when `docType === "DSCR"` (investor gate `occupancy === "RENTAL"`, a rent
+ * source per `rentBasis`, `propertyValue` > 0, one of `loanAmount`/`ltv` > 0,
+ * `creditScore`, `propertyType`), so existing purchase/refinance/bank-statement
+ * senders are wholly unaffected — non-breaking. The DSCR branch REUSES
+ * `creditScore` (FICO), `loanAmount`, `ltv`, `propertyValue`, `annualTaxes`,
+ * `annualInsurance`, `monthlyHoa`, `occupancy`, `propertyType` from the existing
+ * sets — only the rent fields are net-new. The purchase/refinance/bank-statement
+ * required sets are unchanged.
+ *
  * Auth: PFP receiver gates via `requireServiceBearer` + the
  * `pfp-intake-from-spoke:write` permission slug.
  */
@@ -130,6 +144,7 @@ export declare const PfpIntakeFromSpokePayloadSchema: z.ZodObject<{
     unitCount: z.ZodOptional<z.ZodNumber>;
     docType: z.ZodOptional<z.ZodEnum<{
         BANK_STATEMENT: "BANK_STATEMENT";
+        DSCR: "DSCR";
     }>>;
     incomeMethod: z.ZodOptional<z.ZodEnum<{
         personal_bank: "personal_bank";
@@ -201,6 +216,15 @@ export declare const PfpIntakeFromSpokePayloadSchema: z.ZodObject<{
         evenings: "evenings";
         anytime: "anytime";
     }>>;
+    rentBasis: z.ZodOptional<z.ZodEnum<{
+        LEASE: "LEASE";
+        MARKET: "MARKET";
+        STR: "STR";
+    }>>;
+    leaseRent: z.ZodOptional<z.ZodNumber>;
+    marketRent: z.ZodOptional<z.ZodNumber>;
+    strIncome: z.ZodOptional<z.ZodNumber>;
+    monthlyRent: z.ZodOptional<z.ZodNumber>;
     magnetType: z.ZodOptional<z.ZodEnum<{
         other: "other";
         free_prequal: "free_prequal";

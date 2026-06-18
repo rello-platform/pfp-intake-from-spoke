@@ -27,6 +27,20 @@
  * unaffected — non-breaking, mirroring the v0.5.0 `unitCount` precedent. The
  * purchase/refinance required sets are unchanged.
  *
+ * v0.7.0 (2026-06-18) — optional DSCR (investor) loan branch. Home Scout is
+ * adding a DSCR investor-loan "Get Pre-Approved" CTA. A new `DSCR` value on the
+ * `docType` discriminator plus net-new rent fields (`rentBasis`, `leaseRent`,
+ * `marketRent`, `strIncome`, `monthlyRent`) were added — ALL optional at the
+ * schema level. A dedicated superRefine branch enforces the DSCR minimum ONLY
+ * when `docType === "DSCR"` (investor gate `occupancy === "RENTAL"`, a rent
+ * source per `rentBasis`, `propertyValue` > 0, one of `loanAmount`/`ltv` > 0,
+ * `creditScore`, `propertyType`), so existing purchase/refinance/bank-statement
+ * senders are wholly unaffected — non-breaking. The DSCR branch REUSES
+ * `creditScore` (FICO), `loanAmount`, `ltv`, `propertyValue`, `annualTaxes`,
+ * `annualInsurance`, `monthlyHoa`, `occupancy`, `propertyType` from the existing
+ * sets — only the rent fields are net-new. The purchase/refinance/bank-statement
+ * required sets are unchanged.
+ *
  * Auth: PFP receiver gates via `requireServiceBearer` + the
  * `pfp-intake-from-spoke:write` permission slug.
  */
@@ -146,8 +160,8 @@ export const PfpIntakeFromSpokePayloadSchema = z
     //  `propertyValue`, `occupancy`, `cashOutAmount`, `propertyCity/State/County/Zip`
     //  and `creditScore` are REUSED from the shared/refinance sets above — not
     //  redeclared here.
-    /** Doc-type discriminator — present only on the bank-statement path. */
-    docType: z.enum(["BANK_STATEMENT"]).optional(),
+    /** Doc-type discriminator — present only on the bank-statement / DSCR paths. */
+    docType: z.enum(["BANK_STATEMENT", "DSCR"]).optional(),
     /** How qualifying income is documented (drives the method-specific income field). */
     incomeMethod: z
       .enum(["personal_bank", "business_bank", "pnl", "1099", "asset_depletion"])
@@ -212,6 +226,29 @@ export const PfpIntakeFromSpokePayloadSchema = z
       .optional(),
     /** Preferred contact window. */
     bestTimeToCall: z.enum(["mornings", "afternoons", "evenings", "anytime"]).optional(),
+
+    // ─── DSCR (investor) loan branch (v0.7.0) ────────────────────────────────
+    //  Optional, non-breaking addition for Home Scout's DSCR investor-loan
+    //  "Get Pre-Approved" CTA. ALL fields below are `.optional()` at the schema
+    //  level; the DSCR minimum is enforced ONLY when `docType === "DSCR"` via the
+    //  dedicated superRefine branch below. Existing purchase/refinance/bank-statement
+    //  senders are wholly unaffected — same backward-compatible pattern as the
+    //  v0.6.0 BANK_STATEMENT branch.
+    //  REUSED (not redeclared): `creditScore` (FICO), `propertyType`, `occupancy`
+    //  (investor gate = "RENTAL"), `loanAmount`, `ltv`, `propertyValue`,
+    //  `annualTaxes`, `annualInsurance`, `monthlyHoa`, `expectedRate`,
+    //  `reservesMonths`, `interestOnly` — all from the shared/refi/bank-statement
+    //  sets above. Only the rent fields below are net-new.
+    /** Basis used to qualify rental income — drives the required rent source. */
+    rentBasis: z.enum(["LEASE", "MARKET", "STR"]).optional(),
+    /** In-place lease rent, monthly (LEASE basis). */
+    leaseRent: z.number().nonnegative().max(100_000).optional(),
+    /** Appraiser market rent (1007/1025), monthly (MARKET basis, or LEASE fallback). */
+    marketRent: z.number().nonnegative().max(100_000).optional(),
+    /** Short-term-rental income, monthly (STR basis). */
+    strIncome: z.number().nonnegative().max(100_000).optional(),
+    /** Resolved qualifying monthly rent (computed/sent rent figure). */
+    monthlyRent: z.number().nonnegative().max(100_000).optional(),
 
     // ─── Lead-magnet discriminator + cache (v0.3.0) ───
     magnetType: z
@@ -323,6 +360,100 @@ export const PfpIntakeFromSpokePayloadSchema = z
           path: ["statedExpenseRatio"],
           message:
             "statedExpenseRatio is required when expenseFactorSource is cpa_stated",
+        });
+      }
+    }
+
+    // ─── DSCR (investor) minimum (v0.7.0) ──────────────────────────────────
+    //  Fires ONLY when docType === "DSCR"; orthogonal to loanPurpose, so existing
+    //  purchase/refinance/bank-statement callers never reach this. DSCR fields are
+    //  NOT added to the purchase/refinance/bank-statement required sets above —
+    //  this branch is the sole enforcer of the DSCR minimum. Taxes/insurance/HOA
+    //  stay optional (MLO/property-lookup fills when the borrower can't).
+    if (data.docType === "DSCR") {
+      // Investor gate — a DSCR loan must be on a non-owner-occupied (rental)
+      // property. The occupancy enum's investment value is "RENTAL".
+      if (data.occupancy !== "RENTAL") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["occupancy"],
+          message: 'occupancy must be "RENTAL" when docType is DSCR',
+        });
+      }
+
+      // Rental-income source: rentBasis present, plus the matching rent field.
+      if (data.rentBasis === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["rentBasis"],
+          message: "rentBasis is required when docType is DSCR",
+        });
+      } else if (data.rentBasis === "LEASE") {
+        // LEASE qualifies on the in-place lease, or appraiser market rent as fallback.
+        if (data.leaseRent === undefined && data.marketRent === undefined) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["leaseRent"],
+            message:
+              "leaseRent or marketRent is required when rentBasis is LEASE",
+          });
+        }
+      } else if (data.rentBasis === "MARKET") {
+        if (data.marketRent === undefined) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["marketRent"],
+            message: "marketRent is required when rentBasis is MARKET",
+          });
+        }
+      } else if (data.rentBasis === "STR") {
+        if (data.strIncome === undefined) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["strIncome"],
+            message: "strIncome is required when rentBasis is STR",
+          });
+        }
+      }
+
+      // propertyValue is the LTV / quote base for DSCR.
+      if (data.propertyValue === undefined || data.propertyValue <= 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["propertyValue"],
+          message:
+            "propertyValue is required and must be greater than 0 when docType is DSCR",
+        });
+      }
+
+      // At least one of loanAmount / ltv must be present and positive.
+      const hasLoanAmount =
+        data.loanAmount !== undefined && data.loanAmount > 0;
+      const hasLtv = data.ltv !== undefined && data.ltv > 0;
+      if (!hasLoanAmount && !hasLtv) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["loanAmount"],
+          message:
+            "loanAmount or ltv (greater than 0) is required when docType is DSCR",
+        });
+      }
+
+      // creditScore (FICO) — reused from the shared set; required for DSCR pricing.
+      if (data.creditScore === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["creditScore"],
+          message: "creditScore is required when docType is DSCR",
+        });
+      }
+
+      // propertyType — reused from the shared set; required for DSCR pricing.
+      if (data.propertyType === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["propertyType"],
+          message: "propertyType is required when docType is DSCR",
         });
       }
     }
