@@ -117,6 +117,7 @@ export declare const PfpIntakeFromSpokePayloadSchema: z.ZodObject<{
     propertyState: z.ZodOptional<z.ZodString>;
     propertyCounty: z.ZodOptional<z.ZodString>;
     propertyZip: z.ZodOptional<z.ZodString>;
+    unitCount: z.ZodOptional<z.ZodNumber>;
     magnetType: z.ZodOptional<z.ZodEnum<{
         free_prequal: "free_prequal";
         free_home_value: "free_home_value";

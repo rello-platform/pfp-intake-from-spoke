@@ -117,6 +117,14 @@ export const PfpIntakeFromSpokePayloadSchema = z
     propertyState: z.string().max(40).optional(),
     propertyCounty: z.string().max(120).optional(),
     propertyZip: z.string().max(12).optional(),
+    /**
+     * Number of units (1–4) for the subject property; required by PFP's
+     * purchase pricing gate (`required-intake-fields.ts`) to enable
+     * purchase-rate generation in the cockpit. Optional in the contract so
+     * non-purchase / other-spoke senders aren't broken — gate-completeness is
+     * enforced downstream, NOT by contract rejection.
+     */
+    unitCount: z.number().int().nonnegative().optional(),
 
     // ─── Lead-magnet discriminator + cache (v0.3.0) ───
     magnetType: z
