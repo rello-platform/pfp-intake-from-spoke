@@ -41,6 +41,23 @@
  * sets — only the rent fields are net-new. The purchase/refinance/bank-statement
  * required sets are unchanged.
  *
+ * v0.8.0 (2026-06-18) — optional VA loan branch. Home Scout is adding a VA-loan
+ * "Get Pre-Approved" CTA. A new `VA` value on the `docType` discriminator plus
+ * net-new VA fields (`vaCoeStatus`, `vaDisabilityRating`, `vaIsSurvivingSpouse`,
+ * `vaPriorVaLoanOpen`, `vaUsedEntitlement`, `vaEntitlementRestored`,
+ * `vaHouseholdSize`, `vaGrossMonthlyIncome`, `vaMonthlyDebts`, `vaCountyFips`)
+ * were added — ALL optional at the schema level, each mapping 1:1 to a PFP
+ * `va_*` custom field. A dedicated superRefine branch enforces the VA minimum
+ * ONLY when `docType === "VA"` (rate/residual-critical core: `propertyState`,
+ * `propertyValue` > 0, `vaCoeStatus`, veteran eligibility via reused `isVeteran`/
+ * `militaryServiceType`, `vaHouseholdSize`, `vaGrossMonthlyIncome`), so existing
+ * purchase/refinance/bank-statement/DSCR senders are wholly unaffected —
+ * non-breaking. The VA branch REUSES `isVeteran`/`militaryServiceType`,
+ * `propertyState`, `propertyValue`, `purchasePrice`/`downPaymentAmount`,
+ * `loanPurpose`, `currentLoanBalance`/`currentRate` from the existing sets — only
+ * the `va*` fields are net-new. The purchase/refinance/bank-statement/DSCR
+ * required sets are unchanged.
+ *
  * Auth: PFP receiver gates via `requireServiceBearer` + the
  * `pfp-intake-from-spoke:write` permission slug.
  */
@@ -160,8 +177,8 @@ export const PfpIntakeFromSpokePayloadSchema = z
     //  `propertyValue`, `occupancy`, `cashOutAmount`, `propertyCity/State/County/Zip`
     //  and `creditScore` are REUSED from the shared/refinance sets above — not
     //  redeclared here.
-    /** Doc-type discriminator — present only on the bank-statement / DSCR paths. */
-    docType: z.enum(["BANK_STATEMENT", "DSCR"]).optional(),
+    /** Doc-type discriminator — present only on the bank-statement / DSCR / VA paths. */
+    docType: z.enum(["BANK_STATEMENT", "DSCR", "VA"]).optional(),
     /** How qualifying income is documented (drives the method-specific income field). */
     incomeMethod: z
       .enum(["personal_bank", "business_bank", "pnl", "1099", "asset_depletion"])
@@ -249,6 +266,43 @@ export const PfpIntakeFromSpokePayloadSchema = z
     strIncome: z.number().nonnegative().max(100_000).optional(),
     /** Resolved qualifying monthly rent (computed/sent rent figure). */
     monthlyRent: z.number().nonnegative().max(100_000).optional(),
+
+    // ─── VA loan branch (v0.8.0) ─────────────────────────────────────────────
+    //  Optional, non-breaking addition for Home Scout's VA-loan "Get Pre-Approved"
+    //  CTA. ALL fields below are `.optional()` at the schema level; the VA minimum
+    //  is enforced ONLY when `docType === "VA"` via the dedicated superRefine branch
+    //  below. Existing purchase/refinance/bank-statement/DSCR senders are wholly
+    //  unaffected — same backward-compatible pattern as the v0.6.0/v0.7.0 branches.
+    //  Each net-new field maps 1:1 to a PFP `va_*` custom field so PFP's
+    //  `handleVaIntake` (contract VA fields → VaInput → `va_*`) mapping is trivial.
+    //  REUSED (not redeclared): `isVeteran` + `militaryServiceType` (veteran
+    //  eligibility), `propertyState` (residual-income region), `propertyValue`
+    //  (estimated value), `purchasePrice`/`downPaymentAmount` (LTV), `loanPurpose`
+    //  (intent derivation), `currentLoanBalance`/`currentRate` (refi/IRRRL),
+    //  `propertyCounty` (county lookup) — all from the shared/purchase/refi sets.
+    //  Only the `va*` fields below are net-new. `vaMonthlyDebts` is kept distinct
+    //  from `otherMonthlyDebts` (DTI) because it is the residual-income denominator
+    //  (full monthly debt obligations) and maps 1:1 to its own `va_*` consumer key.
+    /** COE status → `va_coe_status` ∈ {HAVE, APPLIED, UNKNOWN}. */
+    vaCoeStatus: z.enum(["HAVE", "APPLIED", "UNKNOWN"]).optional(),
+    /** VA disability rating bucket → `va_disability_rating` ∈ {NONE, 10_PLUS} (funding-fee input). */
+    vaDisabilityRating: z.enum(["NONE", "10_PLUS"]).optional(),
+    /** Surviving-spouse eligibility (funding-fee / entitlement input). */
+    vaIsSurvivingSpouse: z.boolean().optional(),
+    /** Whether a prior VA loan is still open (entitlement / second-tier input). */
+    vaPriorVaLoanOpen: z.boolean().optional(),
+    /** Previously-used entitlement, USD (second-tier / max-loan input). */
+    vaUsedEntitlement: z.number().nonnegative().max(5_000_000).optional(),
+    /** Whether prior entitlement has been restored. */
+    vaEntitlementRestored: z.boolean().optional(),
+    /** Household size for residual-income table lookup. */
+    vaHouseholdSize: z.number().int().nonnegative().max(20).optional(),
+    /** Gross monthly income — residual-income numerator. */
+    vaGrossMonthlyIncome: z.number().nonnegative().max(1_000_000).optional(),
+    /** Total monthly debts — residual-income denominator (distinct from otherMonthlyDebts/DTI). */
+    vaMonthlyDebts: z.number().nonnegative().max(1_000_000).optional(),
+    /** County FIPS (≤5 chars) for county loan-limit / region lookup. */
+    vaCountyFips: z.string().max(5).optional(),
 
     // ─── Lead-magnet discriminator + cache (v0.3.0) ───
     magnetType: z
@@ -454,6 +508,73 @@ export const PfpIntakeFromSpokePayloadSchema = z
           code: "custom",
           path: ["propertyType"],
           message: "propertyType is required when docType is DSCR",
+        });
+      }
+    }
+
+    // ─── VA minimum (v0.8.0) ───────────────────────────────────────────────
+    //  Fires ONLY when docType === "VA"; orthogonal to loanPurpose, so existing
+    //  purchase/refinance/bank-statement/DSCR callers never reach this. VA fields
+    //  are NOT added to the other branches' required sets above — this branch is
+    //  the sole enforcer of the VA minimum. Requires only the rate/residual-critical
+    //  core; disability/entitlement/used-entitlement stay optional (funding-fee
+    //  inputs the MLO can fill).
+    if (data.docType === "VA") {
+      // Residual-income region — propertyState drives the VA residual table.
+      if (data.propertyState === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["propertyState"],
+          message: "propertyState is required when docType is VA",
+        });
+      }
+
+      // Estimated property value — LTV / quote base.
+      if (data.propertyValue === undefined || data.propertyValue <= 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["propertyValue"],
+          message:
+            "propertyValue is required and must be greater than 0 when docType is VA",
+        });
+      }
+
+      // COE status — entitlement entry requirement.
+      if (data.vaCoeStatus === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["vaCoeStatus"],
+          message: "vaCoeStatus is required when docType is VA",
+        });
+      }
+
+      // Veteran eligibility — isVeteran === true OR a military service type present.
+      const isVeteranEligible =
+        data.isVeteran === true ||
+        (data.militaryServiceType !== undefined &&
+          data.militaryServiceType !== null);
+      if (!isVeteranEligible) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["isVeteran"],
+          message:
+            "isVeteran (true) or militaryServiceType is required when docType is VA",
+        });
+      }
+
+      // Residual-income inputs — household size (table key) + gross monthly income.
+      if (data.vaHouseholdSize === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["vaHouseholdSize"],
+          message: "vaHouseholdSize is required when docType is VA",
+        });
+      }
+      if (data.vaGrossMonthlyIncome === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["vaGrossMonthlyIncome"],
+          message: "vaGrossMonthlyIncome is required when docType is VA",
         });
       }
     }

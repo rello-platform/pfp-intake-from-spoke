@@ -41,6 +41,23 @@
  * sets — only the rent fields are net-new. The purchase/refinance/bank-statement
  * required sets are unchanged.
  *
+ * v0.8.0 (2026-06-18) — optional VA loan branch. Home Scout is adding a VA-loan
+ * "Get Pre-Approved" CTA. A new `VA` value on the `docType` discriminator plus
+ * net-new VA fields (`vaCoeStatus`, `vaDisabilityRating`, `vaIsSurvivingSpouse`,
+ * `vaPriorVaLoanOpen`, `vaUsedEntitlement`, `vaEntitlementRestored`,
+ * `vaHouseholdSize`, `vaGrossMonthlyIncome`, `vaMonthlyDebts`, `vaCountyFips`)
+ * were added — ALL optional at the schema level, each mapping 1:1 to a PFP
+ * `va_*` custom field. A dedicated superRefine branch enforces the VA minimum
+ * ONLY when `docType === "VA"` (rate/residual-critical core: `propertyState`,
+ * `propertyValue` > 0, `vaCoeStatus`, veteran eligibility via reused `isVeteran`/
+ * `militaryServiceType`, `vaHouseholdSize`, `vaGrossMonthlyIncome`), so existing
+ * purchase/refinance/bank-statement/DSCR senders are wholly unaffected —
+ * non-breaking. The VA branch REUSES `isVeteran`/`militaryServiceType`,
+ * `propertyState`, `propertyValue`, `purchasePrice`/`downPaymentAmount`,
+ * `loanPurpose`, `currentLoanBalance`/`currentRate` from the existing sets — only
+ * the `va*` fields are net-new. The purchase/refinance/bank-statement/DSCR
+ * required sets are unchanged.
+ *
  * Auth: PFP receiver gates via `requireServiceBearer` + the
  * `pfp-intake-from-spoke:write` permission slug.
  */
@@ -143,6 +160,7 @@ export declare const PfpIntakeFromSpokePayloadSchema: z.ZodObject<{
     propertyZip: z.ZodOptional<z.ZodString>;
     unitCount: z.ZodOptional<z.ZodNumber>;
     docType: z.ZodOptional<z.ZodEnum<{
+        VA: "VA";
         BANK_STATEMENT: "BANK_STATEMENT";
         DSCR: "DSCR";
     }>>;
@@ -225,6 +243,23 @@ export declare const PfpIntakeFromSpokePayloadSchema: z.ZodObject<{
     marketRent: z.ZodOptional<z.ZodNumber>;
     strIncome: z.ZodOptional<z.ZodNumber>;
     monthlyRent: z.ZodOptional<z.ZodNumber>;
+    vaCoeStatus: z.ZodOptional<z.ZodEnum<{
+        HAVE: "HAVE";
+        APPLIED: "APPLIED";
+        UNKNOWN: "UNKNOWN";
+    }>>;
+    vaDisabilityRating: z.ZodOptional<z.ZodEnum<{
+        NONE: "NONE";
+        "10_PLUS": "10_PLUS";
+    }>>;
+    vaIsSurvivingSpouse: z.ZodOptional<z.ZodBoolean>;
+    vaPriorVaLoanOpen: z.ZodOptional<z.ZodBoolean>;
+    vaUsedEntitlement: z.ZodOptional<z.ZodNumber>;
+    vaEntitlementRestored: z.ZodOptional<z.ZodBoolean>;
+    vaHouseholdSize: z.ZodOptional<z.ZodNumber>;
+    vaGrossMonthlyIncome: z.ZodOptional<z.ZodNumber>;
+    vaMonthlyDebts: z.ZodOptional<z.ZodNumber>;
+    vaCountyFips: z.ZodOptional<z.ZodString>;
     magnetType: z.ZodOptional<z.ZodEnum<{
         other: "other";
         free_prequal: "free_prequal";
