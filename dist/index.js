@@ -58,6 +58,29 @@
  * the `va*` fields are net-new. The purchase/refinance/bank-statement/DSCR
  * required sets are unchanged.
  *
+ * v0.9.0 (2026-06-19) — optional HECM (reverse-mortgage) loan branch. Home Scout
+ * is adding a HECM "Get Pre-Approved" CTA. A new `HECM` value on the `docType`
+ * discriminator plus net-new reverse-mortgage fields (`borrowerAge`,
+ * `coBorrowerAge`, `existingLienPayoff`, `reverseProductKind`, `useOfProceeds`)
+ * were added — ALL optional at the schema level. A dedicated superRefine branch
+ * enforces the HECM minimum ONLY when `docType === "HECM"` (rate/PLF-critical
+ * core: `borrowerAge` present AND >= 62 [HECM age eligibility], `propertyValue`
+ * present & > 0, `propertyState` present), so existing
+ * purchase/refinance/bank-statement/DSCR/VA senders are wholly unaffected —
+ * non-breaking, mirroring the v0.6.0/v0.7.0/v0.8.0 branches. The HECM branch
+ * REUSES `propertyValue` (home value — the PLF base), `propertyState` (county
+ * loan-limit lookup), `occupancy` (must be owner-occupied = "PRIMARY"),
+ * `propertyType`, `currentLoanBalance` (existing 1st lien), `secondMortgageBalance`
+ * (second lien), `baseIncome` (LESA financial-assessment annual income),
+ * `annualTaxes`/`annualInsurance` (LESA annual property charges, sent separately),
+ * and `vaHouseholdSize` (family size) from the existing sets — only the five
+ * fields above are net-new. `existingLienPayoff` is kept DISTINCT from
+ * `currentLoanBalance`: the latter is the remaining first-mortgage balance, while
+ * the former is the closing payoff figure (balance + accrued interest/payoff
+ * costs) that drives HECM net proceeds — same distinct-driver rationale as v0.8.0
+ * keeping `vaMonthlyDebts` separate from `otherMonthlyDebts`. The
+ * purchase/refinance/bank-statement/DSCR/VA required sets are unchanged.
+ *
  * Auth: PFP receiver gates via `requireServiceBearer` + the
  * `pfp-intake-from-spoke:write` permission slug.
  */
@@ -168,8 +191,8 @@ export const PfpIntakeFromSpokePayloadSchema = z
     //  `propertyValue`, `occupancy`, `cashOutAmount`, `propertyCity/State/County/Zip`
     //  and `creditScore` are REUSED from the shared/refinance sets above — not
     //  redeclared here.
-    /** Doc-type discriminator — present only on the bank-statement / DSCR / VA paths. */
-    docType: z.enum(["BANK_STATEMENT", "DSCR", "VA"]).optional(),
+    /** Doc-type discriminator — present only on the bank-statement / DSCR / VA / HECM paths. */
+    docType: z.enum(["BANK_STATEMENT", "DSCR", "VA", "HECM"]).optional(),
     /** How qualifying income is documented (drives the method-specific income field). */
     incomeMethod: z
         .enum(["personal_bank", "business_bank", "pnl", "1099", "asset_depletion"])
@@ -256,6 +279,32 @@ export const PfpIntakeFromSpokePayloadSchema = z
     strIncome: z.number().nonnegative().max(100_000).optional(),
     /** Resolved qualifying monthly rent (computed/sent rent figure). */
     monthlyRent: z.number().nonnegative().max(100_000).optional(),
+    // ─── HECM (reverse-mortgage) loan branch (v0.9.0) ────────────────────────
+    //  Optional, non-breaking addition for Home Scout's HECM "Get Pre-Approved"
+    //  CTA. ALL fields below are `.optional()` at the schema level; the HECM
+    //  minimum is enforced ONLY when `docType === "HECM"` via the dedicated
+    //  superRefine branch below. Existing purchase/refinance/bank-statement/DSCR/VA
+    //  senders are wholly unaffected — same backward-compatible pattern as the
+    //  v0.6.0/v0.7.0/v0.8.0 branches.
+    //  REUSED (not redeclared): `propertyValue` (HECM home value — the PLF base),
+    //  `propertyState` (county loan-limit lookup), `occupancy` (must be
+    //  owner-occupied = "PRIMARY"), `propertyType`, `currentLoanBalance` (existing
+    //  1st lien), `secondMortgageBalance` (second lien), `baseIncome` (LESA
+    //  financial-assessment annual income), `annualTaxes`/`annualInsurance` (LESA
+    //  annual property charges, sent separately), `vaHouseholdSize` (family size).
+    //  Only the five fields below are net-new.
+    /** Youngest-eligible borrower age — the PLF (principal-limit-factor) driver. The CTA gates 62+, but the contract floor stays 18 (non-rejection); the superRefine enforces >= 62 for HECM. */
+    borrowerAge: z.number().int().min(18).max(130).optional(),
+    /** Co-borrower age — the youngest of the two borrowers drives the PLF. */
+    coBorrowerAge: z.number().int().min(18).max(130).optional(),
+    /** Existing first-lien payoff at closing (balance + accrued interest/payoff costs) — the HECM net-proceeds driver; DISTINCT from `currentLoanBalance` (remaining first-mortgage balance). */
+    existingLienPayoff: z.number().nonnegative().max(100_000_000).optional(),
+    /** Reverse-mortgage product kind → product-specific PLF / margin table. */
+    reverseProductKind: z
+        .enum(["HECM_ADJUSTABLE", "HECM_FIXED", "HOMESAFE_ADJUSTABLE", "HOMESAFE_FIXED"])
+        .optional(),
+    /** Intended use of proceeds — nurture free-text (not a quote driver). */
+    useOfProceeds: z.string().max(200).optional(),
     // ─── VA loan branch (v0.8.0) ─────────────────────────────────────────────
     //  Optional, non-breaking addition for Home Scout's VA-loan "Get Pre-Approved"
     //  CTA. ALL fields below are `.optional()` at the schema level; the VA minimum
@@ -543,6 +592,41 @@ export const PfpIntakeFromSpokePayloadSchema = z
                 code: "custom",
                 path: ["vaGrossMonthlyIncome"],
                 message: "vaGrossMonthlyIncome is required when docType is VA",
+            });
+        }
+    }
+    // ─── HECM (reverse-mortgage) minimum (v0.9.0) ──────────────────────────
+    //  Fires ONLY when docType === "HECM"; orthogonal to loanPurpose, so existing
+    //  purchase/refinance/bank-statement/DSCR/VA callers never reach this. HECM
+    //  fields are NOT added to the other branches' required sets above — this
+    //  branch is the sole enforcer of the HECM minimum. Requires only the
+    //  PLF/rate-critical core; co-borrower age, income, property charges, and
+    //  product kind stay optional (the MLO/borrower may not supply them).
+    if (data.docType === "HECM") {
+        // HECM age eligibility — borrowerAge present AND >= 62. The contract field
+        // floor is 18 (non-rejection of a malformed-but-present value); 62 is the
+        // program eligibility gate enforced here.
+        if (data.borrowerAge === undefined || data.borrowerAge < 62) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["borrowerAge"],
+                message: "borrowerAge must be 62 or older for HECM",
+            });
+        }
+        // Home value — the PLF (principal-limit-factor) base.
+        if (data.propertyValue === undefined || data.propertyValue <= 0) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["propertyValue"],
+                message: "propertyValue is required and must be greater than 0 when docType is HECM",
+            });
+        }
+        // County loan-limit lookup region.
+        if (data.propertyState === undefined) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["propertyState"],
+                message: "propertyState is required when docType is HECM",
             });
         }
     }

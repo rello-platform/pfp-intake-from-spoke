@@ -58,6 +58,29 @@
  * the `va*` fields are net-new. The purchase/refinance/bank-statement/DSCR
  * required sets are unchanged.
  *
+ * v0.9.0 (2026-06-19) — optional HECM (reverse-mortgage) loan branch. Home Scout
+ * is adding a HECM "Get Pre-Approved" CTA. A new `HECM` value on the `docType`
+ * discriminator plus net-new reverse-mortgage fields (`borrowerAge`,
+ * `coBorrowerAge`, `existingLienPayoff`, `reverseProductKind`, `useOfProceeds`)
+ * were added — ALL optional at the schema level. A dedicated superRefine branch
+ * enforces the HECM minimum ONLY when `docType === "HECM"` (rate/PLF-critical
+ * core: `borrowerAge` present AND >= 62 [HECM age eligibility], `propertyValue`
+ * present & > 0, `propertyState` present), so existing
+ * purchase/refinance/bank-statement/DSCR/VA senders are wholly unaffected —
+ * non-breaking, mirroring the v0.6.0/v0.7.0/v0.8.0 branches. The HECM branch
+ * REUSES `propertyValue` (home value — the PLF base), `propertyState` (county
+ * loan-limit lookup), `occupancy` (must be owner-occupied = "PRIMARY"),
+ * `propertyType`, `currentLoanBalance` (existing 1st lien), `secondMortgageBalance`
+ * (second lien), `baseIncome` (LESA financial-assessment annual income),
+ * `annualTaxes`/`annualInsurance` (LESA annual property charges, sent separately),
+ * and `vaHouseholdSize` (family size) from the existing sets — only the five
+ * fields above are net-new. `existingLienPayoff` is kept DISTINCT from
+ * `currentLoanBalance`: the latter is the remaining first-mortgage balance, while
+ * the former is the closing payoff figure (balance + accrued interest/payoff
+ * costs) that drives HECM net proceeds — same distinct-driver rationale as v0.8.0
+ * keeping `vaMonthlyDebts` separate from `otherMonthlyDebts`. The
+ * purchase/refinance/bank-statement/DSCR/VA required sets are unchanged.
+ *
  * Auth: PFP receiver gates via `requireServiceBearer` + the
  * `pfp-intake-from-spoke:write` permission slug.
  */
@@ -163,6 +186,7 @@ export declare const PfpIntakeFromSpokePayloadSchema: z.ZodObject<{
         VA: "VA";
         BANK_STATEMENT: "BANK_STATEMENT";
         DSCR: "DSCR";
+        HECM: "HECM";
     }>>;
     incomeMethod: z.ZodOptional<z.ZodEnum<{
         personal_bank: "personal_bank";
@@ -243,6 +267,16 @@ export declare const PfpIntakeFromSpokePayloadSchema: z.ZodObject<{
     marketRent: z.ZodOptional<z.ZodNumber>;
     strIncome: z.ZodOptional<z.ZodNumber>;
     monthlyRent: z.ZodOptional<z.ZodNumber>;
+    borrowerAge: z.ZodOptional<z.ZodNumber>;
+    coBorrowerAge: z.ZodOptional<z.ZodNumber>;
+    existingLienPayoff: z.ZodOptional<z.ZodNumber>;
+    reverseProductKind: z.ZodOptional<z.ZodEnum<{
+        HECM_ADJUSTABLE: "HECM_ADJUSTABLE";
+        HECM_FIXED: "HECM_FIXED";
+        HOMESAFE_ADJUSTABLE: "HOMESAFE_ADJUSTABLE";
+        HOMESAFE_FIXED: "HOMESAFE_FIXED";
+    }>>;
+    useOfProceeds: z.ZodOptional<z.ZodString>;
     vaCoeStatus: z.ZodOptional<z.ZodEnum<{
         HAVE: "HAVE";
         APPLIED: "APPLIED";
