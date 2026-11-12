@@ -81,6 +81,13 @@
  * keeping `vaMonthlyDebts` separate from `otherMonthlyDebts`. The
  * purchase/refinance/bank-statement/DSCR/VA required sets are unchanged.
  *
+ * v0.11.0 (2026-11-12) — the HS_CYR_QUOTE branch (PFP GATEWAY G-8). A DISTINCT strict
+ * schema (`HsCyrQuoteIntakePayloadSchema`, ./hs-cyr-quote.ts) chosen by `source:
+ * "HS_CYR_QUOTE"` in `parsePfpIntakeFromSpokeRequest` before any other schema runs, so
+ * it never inherits the purchase/refinance required borrower fields. Requests with no
+ * `source` key parse exactly as before. See ./hs-cyr-quote.ts for the idempotency-key
+ * derivation (H-68) and the contractVersion → v mapping (H-69).
+ *
  * Auth: PFP receiver gates via `requireServiceBearer` + the
  * `pfp-intake-from-spoke:write` permission slug.
  */
@@ -245,12 +252,12 @@ export declare const PfpIntakeFromSpokePayloadSchema: z.ZodObject<{
         mixed: "mixed";
     }>>;
     leadSource: z.ZodOptional<z.ZodEnum<{
+        other: "other";
         realtor: "realtor";
         cpa_attorney: "cpa_attorney";
         referral: "referral";
         online: "online";
         repeat_client: "repeat_client";
-        other: "other";
     }>>;
     bestTimeToCall: z.ZodOptional<z.ZodEnum<{
         mornings: "mornings";
@@ -312,4 +319,29 @@ export declare const PfpIntakeFromSpokePayloadSchema: z.ZodObject<{
     scoutFormPayload: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
 }, z.core.$strip>;
 export type PfpIntakeFromSpokePayload = z.infer<typeof PfpIntakeFromSpokePayloadSchema>;
+export * from "./hs-cyr-quote";
+import { type HsCyrQuoteIntakePayload } from "./hs-cyr-quote";
+/** A parsed request: which branch it is, and its payload. */
+export type PfpIntakeFromSpokeRequest = {
+    kind: "HS_CYR_QUOTE";
+    payload: HsCyrQuoteIntakePayload;
+} | {
+    kind: "SPOKE_FORM";
+    payload: PfpIntakeFromSpokePayload;
+};
+export type PfpIntakeFromSpokeRequestParse = {
+    success: true;
+    data: PfpIntakeFromSpokeRequest;
+} | {
+    success: false;
+    error: z.ZodError;
+};
+/**
+ * Parse a receiver request body. The `source` key chooses the branch BEFORE any schema runs:
+ *   - `source: "HS_CYR_QUOTE"` → `HsCyrQuoteIntakePayloadSchema` (strict; never the purchase/refinance schema);
+ *   - no `source` key          → `PfpIntakeFromSpokePayloadSchema`, exactly as before v0.11.0;
+ *   - any other `source`       → refused (an unknown branch is never read as a form payload).
+ * So a malformed CYR payload can never fall through and be accepted by the form schema.
+ */
+export declare function parsePfpIntakeFromSpokeRequest(raw: unknown): PfpIntakeFromSpokeRequestParse;
 //# sourceMappingURL=index.d.ts.map

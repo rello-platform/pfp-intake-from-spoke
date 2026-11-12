@@ -81,6 +81,13 @@
  * keeping `vaMonthlyDebts` separate from `otherMonthlyDebts`. The
  * purchase/refinance/bank-statement/DSCR/VA required sets are unchanged.
  *
+ * v0.11.0 (2026-11-12) — the HS_CYR_QUOTE branch (PFP GATEWAY G-8). A DISTINCT strict
+ * schema (`HsCyrQuoteIntakePayloadSchema`, ./hs-cyr-quote.ts) chosen by `source:
+ * "HS_CYR_QUOTE"` in `parsePfpIntakeFromSpokeRequest` before any other schema runs, so
+ * it never inherits the purchase/refinance required borrower fields. Requests with no
+ * `source` key parse exactly as before. See ./hs-cyr-quote.ts for the idempotency-key
+ * derivation (H-68) and the contractVersion → v mapping (H-69).
+ *
  * Auth: PFP receiver gates via `requireServiceBearer` + the
  * `pfp-intake-from-spoke:write` permission slug.
  */
@@ -631,3 +638,35 @@ export const PfpIntakeFromSpokePayloadSchema = z
         }
     }
 });
+// ─── v0.11.0 — HS_CYR_QUOTE branch + the request dispatcher ─────────────────
+export * from "./hs-cyr-quote";
+import { HS_CYR_QUOTE_SOURCE, HsCyrQuoteIntakePayloadSchema } from "./hs-cyr-quote";
+/**
+ * Parse a receiver request body. The `source` key chooses the branch BEFORE any schema runs:
+ *   - `source: "HS_CYR_QUOTE"` → `HsCyrQuoteIntakePayloadSchema` (strict; never the purchase/refinance schema);
+ *   - no `source` key          → `PfpIntakeFromSpokePayloadSchema`, exactly as before v0.11.0;
+ *   - any other `source`       → refused (an unknown branch is never read as a form payload).
+ * So a malformed CYR payload can never fall through and be accepted by the form schema.
+ */
+export function parsePfpIntakeFromSpokeRequest(raw) {
+    const isObject = raw !== null && typeof raw === "object" && !Array.isArray(raw);
+    if (isObject && Object.prototype.hasOwnProperty.call(raw, "source")) {
+        const source = raw.source;
+        if (source !== HS_CYR_QUOTE_SOURCE) {
+            return {
+                success: false,
+                error: new z.ZodError([
+                    { code: "custom", path: ["source"], message: `unknown source; the only branch with a source is ${HS_CYR_QUOTE_SOURCE}`, input: source },
+                ]),
+            };
+        }
+        const parsed = HsCyrQuoteIntakePayloadSchema.safeParse(raw);
+        return parsed.success
+            ? { success: true, data: { kind: "HS_CYR_QUOTE", payload: parsed.data } }
+            : { success: false, error: parsed.error };
+    }
+    const parsed = PfpIntakeFromSpokePayloadSchema.safeParse(raw);
+    return parsed.success
+        ? { success: true, data: { kind: "SPOKE_FORM", payload: parsed.data } }
+        : { success: false, error: parsed.error };
+}

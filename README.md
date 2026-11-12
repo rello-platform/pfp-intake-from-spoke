@@ -109,3 +109,27 @@ Backward-compat: `z.object` default-strips unknown keys (no `.strict()` / no `.p
 - `@rello-platform/permissions` — `INTAKE_FROM_SPOKE_WRITE` (slug `pfp-intake-from-spoke:write`, `validatedBy: ["pathfinder-pro"]`).
 - `@rello-platform/api-client` — `getPathfinderProBaseUrl()` for outbound HS→PFP URL normalization.
 - `@rello-platform/slugs` — `APP_SLUGS` / `ENGINE_SLUGS` registry (consumed via the permissions package).
+
+## v0.11.0 — `HS_CYR_QUOTE` branch (Check Your Rate quote → PFP pipeline)
+
+A separate, strict branch for Home Scout's stored Check Your Rate quote (`home_scout."CyrQuoteSubmission"`). Receivers call
+`parsePfpIntakeFromSpokeRequest(body)`: a body with `source: "HS_CYR_QUOTE"` is parsed by `HsCyrQuoteIntakePayloadSchema` only; a
+body without `source` is parsed by `PfpIntakeFromSpokePayloadSchema` exactly as before; any other `source` is refused.
+
+| Field | Rule |
+|---|---|
+| `source` | `"HS_CYR_QUOTE"` |
+| `agentSlug` | the PAGE agent (whose Check Your Rate page priced the quote) |
+| `relloLeadId` | required, non-null |
+| `leadOwnerId` | required key, nullable — the Rello User id Rello stated as the lead's owner; null = unknown |
+| `sendIdempotencyKey` | `cyrQuoteIdempotencyKey(cyrQuote.submissionKey)` = `"cyrq:" + base64url(sha256(submissionKey))`, always 48 chars; any other value is refused |
+| `firstName`, `email` | required; `lastName`, `phone` optional. No other borrower field exists on this branch |
+| `cyrQuote` | `{ v, submissionKey, scenarioStatus: "stated", scenario }` — the stored row, verbatim |
+
+- **Strict envelope:** unknown keys are refused at every level (envelope, `cyrQuote`, `scenario`, each row).
+- **contractVersion → v:** `CYR_QUOTE_CONTRACT_VERSION_TO_V = { 1: 1 }`. Any other stored version is not sendable.
+- **Nulls:** `scenario.rows` is null unless `rowsStatus === "stated"`; `[]` is refused. Every status keeps its own value.
+- **Sender helper:** `cyrQuoteSendEligibility(row)` returns `{ eligible: true, cyrQuote, sendIdempotencyKey }` or a named reason
+  (`scenario_status:<status>`, `no_rello_lead`, `contract_version_unknown`, `scenario_unreadable`). Only `stated` rows with a lead are sent.
+
+Tests: `npm test` (vitest, `test/hs-cyr-quote.test.ts`).

@@ -1,6 +1,6 @@
 {
   "name": "@rello-platform/pfp-intake-from-spoke",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Cross-app Pfp LeadIntake-from-spoke zod payload schema for spoke→PFP intake creation (e.g., HS get-pre-approved CTA).",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,13 +13,17 @@
   "scripts": {
     "compile": "tsc",
     "prepublishOnly": "npm run compile",
-    "hooks": "git config core.hooksPath .husky || true"
+    "hooks": "git config core.hooksPath .husky || true",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
     "zod": "^4.3.5"
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "@types/node": "^22.10.2",
+    "typescript": "^5.4.0",
+    "vitest": "^3.2.4"
   },
   "repository": {
     "type": "git",
